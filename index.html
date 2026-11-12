@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>VTT dice — 3D dice throw demo</title>
+<meta name="description" content="VTT dice — 3D dice throw demo (d4 to d20, d100 pair, d100 ball; up to 10 dice at once): three.js + cannon-es, optional forced result.">
+<script type="importmap">
+{ "imports": {
+    "three": "./vendor/three/build/three.module.js",
+    "three/addons/": "./vendor/three/examples/jsm/",
+    "cannon-es": "./vendor/cannon-es/cannon-es.js"
+} }
+</script>
+<style>
+  :root {
+    --bg: #0d130f; --ink: #f1e6cf; --muted: #a99f89; --gold: #d9a94f;
+    --panel: rgba(14, 20, 16, 0.78); --line: rgba(241, 230, 207, 0.18);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+  #top { position: fixed; top: 0; left: 0; right: 0; padding: 34px 16px 0; text-align: center; pointer-events: none; }
+  #result { font-family: Georgia, "Times New Roman", serif; font-size: clamp(2rem, 7vw, 3.6rem); line-height: 1.1;
+    min-height: 1.15em; letter-spacing: 0.02em; text-shadow: 0 2px 12px rgba(0,0,0,.6); }
+  #result.busy { color: var(--muted); }
+  #result b { color: var(--gold); font-weight: 700; }
+  #result small { color: var(--muted); font-size: 0.4em; letter-spacing: 0.04em; }
+  #history { display: flex; gap: 5px; justify-content: safe center; flex-wrap: nowrap; overflow: hidden; min-height: 26px; padding: 4px 0 6px; }
+  .chip { min-width: 24px; padding: 2px 6px; text-align: center; border-radius: 6px; background: var(--panel); border: 1px solid var(--line);
+    font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+  .chip i { font-style: normal; font-size: 0.75em; color: var(--muted); }
+  .chip { white-space: nowrap; }
+  .chip.forced { border-color: var(--gold); color: var(--gold); }
+  /* per-die results of a handful (and the picked results while rolling) */
+  #parts { display: flex; gap: 5px; justify-content: center; flex-wrap: wrap; padding-top: 2px; }
+  #parts:empty { display: none; }
+  #parts .srv { color: var(--muted); font-size: 0.8rem; }
+
+  #hud { position: fixed; top: 8px; left: 8px; font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; color: var(--muted);
+    background: var(--panel); padding: 3px 7px; border-radius: 6px; pointer-events: none; }
+  #opts { position: fixed; top: 8px; right: 8px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  #opts button { font-size: 12px; padding: 5px 9px; }
+  /* phone: #opts is a fixed-width column and #top leaves room for it, so the total and the per-die chips centre in the
+     space left of it (and wrap there); the history chips are dropped (the stats panel covers history) */
+  @media (max-width: 520px) {
+    #opts { width: 120px; }
+    #opts button { width: 100%; padding-inline: 4px; white-space: nowrap; }
+    #top { padding-left: 16px; padding-right: 136px; }   /* 8 (opts margin) + 120 (opts) + 8 */
+    #history { display: none; }
+  }
+
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(14px + env(safe-area-inset-bottom));
+    display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; justify-content: center; background: linear-gradient(transparent, rgba(8,12,9,.88) 40%); }
+  #bar label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.95rem; }
+  select, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  select { padding: 9px 10px; min-height: 44px; }
+  button { cursor: pointer; padding: 8px 14px; }
+  button:hover:not(:disabled) { border-color: var(--gold); }
+  button:focus-visible, select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  #throw { min-height: 56px; min-width: 190px; font-size: 1.35rem; font-weight: 700; letter-spacing: 0.06em;
+    color: #1b1408; background: var(--gold); border-color: var(--gold); border-radius: 12px; }
+  #throw:disabled { opacity: 0.45; cursor: default; }
+  #status { flex-basis: 100%; margin: 0; text-align: center; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; color: var(--muted); }
+  #note { position: fixed; left: 50%; bottom: 150px; transform: translateX(-50%); max-width: calc(100% - 32px); text-align: center;
+    background: var(--panel); border: 1px solid var(--gold); color: var(--ink); padding: 8px 12px; border-radius: 8px; font-size: 0.9rem; }
+  #note[hidden] { display: none; }
+  #hint { color: var(--muted); font-size: 0.8rem; }
+  #bar [hidden] { display: none; }
+  @media (max-width: 520px) { #hint { display: none; } #throw { flex: 1 1 150px; } }
+
+  /* handful panel: fixed at the left edge on wide screens (mirror of the stats panel); below 760 px a sheet above the bar behind
+     the Dice button (top/bottom/max-height are set by layoutTray in main.js). One row per die: [-] [icon + name, count badge] [+] */
+  #tray { position: fixed; left: 8px; right: 8px; z-index: 3; display: none; flex-direction: column; gap: 8px; padding: 8px; --ico: 56px;
+    background: rgba(14, 20, 16, 0.96); border: 1px solid var(--line); border-radius: 10px; }
+  #tray.open { display: flex; }
+  .tr-head { display: flex; align-items: center; gap: 8px; }
+  .tr-head strong { flex: 1; }
+  #trCount { color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+  #trClose { display: none; min-width: 44px; min-height: 44px; padding: 0; font-size: 1.3rem; line-height: 1; }
+  #rows { list-style: none; margin: 0; padding: 2px; display: grid; grid-template-columns: repeat(auto-fit, minmax(156px, 1fr)); gap: 4px;
+    min-height: 0; overflow-y: auto; }   /* two columns when 2 x 156 px fit (360 px phones), else one */
+  .drow { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 2px; padding: 2px 3px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  .drow.on { border-color: var(--gold); }
+  .drow button { min-width: 44px; min-height: 44px; padding: 0; font-size: 1.2rem; line-height: 1; }
+  .dpic { display: flex; flex-direction: column; align-items: center; gap: 1px; padding-top: 2px; }
+  .ico { position: relative; display: block; }
+  .ico img { display: block; width: var(--ico); height: var(--ico); }
+  .dn { position: absolute; top: -4px; right: -6px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; pointer-events: none;
+    background: var(--gold); color: #1b1408; font-size: 0.75rem; font-weight: 700; line-height: 20px; text-align: center; font-variant-numeric: tabular-nums; }
+  .dn[hidden] { display: none; }
+  .dname { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+  .drow.on .dname { color: var(--ink); }
+  .drow button:disabled, #clear:disabled { opacity: 0.35; cursor: default; }
+  #clear { min-height: 44px; color: var(--muted); }
+  #trayBtn { display: none; min-height: 44px; }
+  #server { min-height: 44px; }
+  #server[aria-pressed="true"] { border-color: var(--gold); color: var(--gold); }
+  @media (min-width: 760px) {
+    #tray { display: flex; right: auto; width: 180px; --ico: 40px; gap: 6px; transform: translateY(-50%); background: var(--panel); }
+    #rows { grid-template-columns: 1fr; gap: 3px; }
+    .drow { padding: 1px 3px; }                       /* compact: all eight rows fit an 800 px high window */
+    .dname { font-size: 0.68rem; line-height: 1.1; }
+    #clear { min-height: 40px; }
+  }
+  @media not all and (min-width: 760px) { #trayBtn { display: inline-block; } #trClose { display: inline-block; } }
+
+  /* tally panel: fixed at the right edge on wide screens, overlay sheet below #opts on narrow ones (top/max-height set by fitCamera in main.js) */
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  #stats { position: fixed; right: 8px; z-index: 2; width: min(240px, calc(100vw - 16px)); overflow-y: auto; padding: 10px;
+    background: rgba(14, 20, 16, 0.94); border: 1px solid var(--line); border-radius: 10px; font-size: 0.85rem; }
+  #stats[hidden] { display: none; }
+  @media (min-width: 760px) { #stats { width: 190px; transform: translateY(-50%); background: var(--panel); } }
+  .st-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  #stTitle { display: block; font-weight: 700; }
+  #stExp, .st-note { color: var(--muted); font-size: 0.75rem; }
+  #stExp { display: block; }
+  .st-pick { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--muted); }
+  .st-pick select { flex: 1; min-width: 0; }
+  #stClose { padding: 0 8px; font-size: 1rem; line-height: 1.5; }
+  #stTable { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 8px 0 6px; font-variant-numeric: tabular-nums; }
+  #stTable th, #stTable td { padding: 2px 0; font-weight: 400; text-align: right; }
+  #stTable th[scope="row"] { text-align: left; }
+  #stTable .cv { width: 24px; } #stTable .cn { width: 30px; } #stTable .cp { width: 52px; }
+  #stTable .b { display: block; height: 6px; margin: 0 8px; border-radius: 3px; background: rgba(241, 230, 207, 0.1); overflow: hidden; }
+  #stTable .b i { display: block; height: 100%; background: var(--gold); }
+  .st-note { margin: 0 0 8px; }
+  .st-btns { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  #stReset { font-size: 12px; padding: 5px 9px; }
+  #stResetAll { font-size: 11px; padding: 4px 7px; color: var(--muted); }
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+
+<div id="top">
+  <div id="result" role="status" aria-live="polite">Loading...</div>
+  <div id="parts" aria-label="Each die"></div>
+  <div id="history" aria-label="Roll history"></div>
+</div>
+<div id="hud">-</div>
+<div id="opts">
+  <button id="texq" type="button" title="Texture size: Full 2048 px, High 1024 px, Light 512 px (phones)">Textures: Full</button>
+  <button id="quality" type="button" aria-pressed="true">Shadows: on</button>
+  <button id="lifttoggle" type="button" aria-pressed="true">Lift result: on</button>
+  <button id="statstoggle" type="button" aria-pressed="false" aria-expanded="false" aria-controls="stats">Stats: off</button>
+</div>
+
+<aside id="stats" aria-label="Throw tally" hidden>
+  <div class="st-head">
+    <div><strong id="stTitle">-</strong><span id="stExp"></span></div>
+    <button id="stClose" type="button" aria-label="Hide stats">&times;</button>
+  </div>
+  <label class="st-pick">Die <select id="stDie"></select></label>
+  <table id="stTable">
+    <caption class="sr">How many times each number came up</caption>
+    <colgroup><col class="cv"><col class="cn"><col><col class="cp"></colgroup>
+    <thead><tr><th scope="col"><span class="sr">Number</span></th><th scope="col"><span class="sr">Count</span></th><th scope="col"><span class="sr">Bar</span></th><th scope="col"><span class="sr">Share</span></th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="st-note">Land on and server rolls are not counted</p>
+  <div class="st-btns">
+    <button id="stReset" type="button">Reset this die</button>
+    <button id="stResetAll" type="button">Reset all</button>
+  </div>
+</aside>
+
+<div id="note" role="status" hidden></div>
+<aside id="tray" aria-label="Handful (up to 10 dice, the d100 pair counts 2)">
+  <div class="tr-head">
+    <strong>Dice</strong><span id="trCount">0 / 10</span>
+    <button id="trClose" type="button" aria-label="Close the dice list">&times;</button>
+  </div>
+  <ul id="rows"></ul>
+  <button id="clear" type="button">Clear</button>
+</aside>
+<div id="bar">
+  <button id="trayBtn" type="button" aria-expanded="false" aria-controls="tray">Dice</button>
+  <label>Die
+    <select id="dieSel" aria-label="Die"></select>
+  </label>
+  <label id="landOn">Land on
+    <select id="target"><option value="free">free</option></select>
+  </label>
+  <button id="server" type="button" aria-pressed="false" hidden>Server roll: off</button>
+  <button id="throw" type="button" disabled>Throw</button>
+  <span id="hint">or press the table, shake and release</span>
+  <p id="status">forced: - | replay matched: -</p>
+</div>
+
+<script type="module" src="./main.js"></script>
+</body>
+</html>

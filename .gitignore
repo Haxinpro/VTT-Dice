@@ -1,0 +1,8 @@
+*.blend1
+__pycache__/
+.DS_Store
+target/
+
+# Claude Code: local approvals (may contain typed commands) and agent worktrees
+.claude/settings.local.json
+.claude/worktrees/
