@@ -6,6 +6,8 @@ d20, the percentile pair (d10 tens + d10) and a 100-face ball. You can use the
 models in your own tabletop; the demo shows one way to throw them with physics
 and how to make a throw end on a chosen number.
 
+**Try it in your browser: [haxinpro.github.io/VTT-Dice](https://haxinpro.github.io/VTT-Dice/)**
+
 ![VTT dice demo: a handful of marble dice lifted above the table](docs/screenshot.webp)
 
 ## Run the demo
@@ -19,7 +21,8 @@ python3 -m http.server 8790 --bind 127.0.0.1
 # open http://127.0.0.1:8790/
 ```
 
-Because it is static, the folder also works on GitHub Pages.
+Because it is static, the folder also works on GitHub Pages; the live demo
+linked above is served that way from this repository.
 
 ## Features
 
